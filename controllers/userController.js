@@ -1,44 +1,33 @@
-import bcrypt from 'bcrypt'
+import Joi from 'joi';
 
-export const hashedPassword =async (password)=>{
-    try{
-        const saltRounds =10;
-       const passwordHashed = await bcrypt.hash(password,saltRounds);
-       return passwordHashed;
-    }catch(error){
-        console.log(error)
-    }
-}
+const userValidation = Joi.object({
+  username: Joi.string().trim().required().messages({
+    'string.empty': 'username is empty',
+    'any.required': 'Name is required'
+  }),
+  email: Joi.string().email().required().messages({
+    'string.email': 'Invalid email format',
+    'string.empty': 'Email is required',
+    'any.required': 'Email is required'
+  }),
+  password: Joi.string().min(6).required().messages({
+    'string.min': 'Password must be at least 6 characters long',
+    'string.empty': 'Password is required',
+    'any.required': 'Password is required'
+  }),
+  phone: Joi.string()
+    .pattern(/^[0-9]{10}$/)
+    .required()
+    .messages({
+      'string.pattern.base': 'Phone number must be exactly 10 digits',
+      'string.empty': 'Phone number is required',
+      'any.required': 'Phone number is required'
+    }),
+  address: Joi.string().required().messages({
+    'string.empty': 'Address is required',
+    'any.required': 'Address is required'
+  }),
+  role: Joi.number().default(0)
+});
 
-export const comparePasword =async (password,passwordHashed)=>{
-    return  bcrypt.compare(password,passwordHashed);
-}
-export const resetPassword = async (req, res) => {
-    try {
-        const { token, newPassword } = req.body;
-
-        const user = await userModel.findOne({ 
-            resetPasswordToken: token, 
-            resetPasswordExpires: { $gt: Date.now() } 
-        });
-
-        if (!user) {
-            return res.status(400).json({ message: "Invalid or expired token" });
-        }
-
-        // Hash the new password
-        const hashedNewPassword = await bcrypt.hash(newPassword, 10);
-        user.password = hashedNewPassword;
-
-        // Remove reset token
-        user.resetPasswordToken = undefined;
-        user.resetPasswordExpires = undefined;
-
-        await user.save();
-
-        res.status(200).json({ message: "Password updated successfully" });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Something went wrong" });
-    }
-};
+export { userValidation };
