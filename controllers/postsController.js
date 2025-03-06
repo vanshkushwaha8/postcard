@@ -1,64 +1,40 @@
- import { comparePasword, hashedPassword } from '../helpers/authhelper.js';
+import { comparePassword, hashedPassword } from '../helpers/authhelper.js';
 import userModel from '../models/userModel.js';
-import PostCard from '../models/postModel.js'
-import JWT from 'jsonwebtoken'
+import PostCard from '../models/postModel.js';
+import JWT from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
+import { userValidation } from '../validation/validation.js';  
 
- //Controller for register
- export const registerController = async(req,res)=>{
+// Controller for register
+export const registerController = async (req, res) => {
     try {
-        
-        const{name,email,password,phone,address} = req.body
-        if(!name){
-            return res.send({error:'The name is required'})
-        }
-        if(!email){
-            return res.send({error:'The email is required'})
-        }
-        if(!password){
-            return res.send({error:'The pasword is required'})
-        }
-        if(!phone){
-            return res.send({error:'The phone is required'})
-        }
-        if(!address){
-            return res.send({error:'The adddress is required'})
+        // Validate request body
+        const { error } = userValidation.validate(req.body, { abortEarly: true });
+        if (error) {
+            return res.status(400).json({ success: false, message: error.details[0].message }); // Show first error only
         }
 
-        //check existing user
-        const existingUserEmail = await userModel.findOne({email})
-   
-        //condition for existing user
-        if(existingUserEmail){
-            return res.status(500).send({
-               success:true,
-               message:'This Email is Already Registered Use Different',
-               
-            })
+        const { username, email, password, phone, address } = req.body;
+
+        // Check existing user
+        const existingUserEmail = await userModel.findOne({ email });
+        if (existingUserEmail) {
+            return res.status(400).json({ success: false, message: 'This email is already registered, use a different one' });
         }
-        
-        // hashed password
-        const hashedPasswords = await hashedPassword(password)
-        const user = await new userModel({name,email,phone, address,password:hashedPasswords}).save()
 
-        //user register
-        res.status(201).send({
-            success:true,
-            message:"User register successfully",
-            user
-        })
+        // Hash password and save user
+        const hashedPasswords = await hashedPassword(password);
+        const user = new userModel({ username, email, phone, address, password: hashedPasswords });
+        await user.save();
 
-        //catch of register
+        res.status(201).json({ success: true, message: "User registered successfully", user });
     } catch (error) {
-        console.log(error)
-        res.status(500).send({
-            success:false,
-            message:'registration Failed',
-            error
-        })
+        console.error(error);
+        res.status(500).json({ success: false, message: 'Registration failed', error });
     }
-}
+};
+
 //controller for Login
 export const loginController =async (req,res)=>{
     try {
@@ -80,7 +56,7 @@ export const loginController =async (req,res)=>{
         })
      }
     //comparing the compare password
-      const match = await comparePasword(password,user.password) 
+      const match = await comparePassword(password,user.password) 
       if(!match){
         return res.status(200).send({
             success:false,
@@ -88,9 +64,14 @@ export const loginController =async (req,res)=>{
         })
       }
       //create jwt token 
-      const token = await JWT.sign({ _id: user._id }, process.env.JWT_SECRET, {
-        expiresIn: "7d",
-      });
+      const token = JWT.sign(
+        { 
+            _id: user._id,
+            role: user.role  // Add role to token payload
+        }, 
+        process.env.JWT_SECRET, 
+        { expiresIn: "7d" }
+    );
       res.status(200).send({
         success:true,
         message:"Login Successfully"
@@ -108,204 +89,165 @@ export const loginController =async (req,res)=>{
     }
 }
 
-//
 
-
-export const logoutController = async (req, res) => {
-    try {
-        const { authorization } = req.headers;
-        if (!authorization) {
-            return res.status(401).json({ message: 'Unauthorized' });
-        }
-
-        const token = authorization.replace('Bearer', '').trim();
-        if (!token) {
-            return res.status(401).json({ message: 'Token not provided' });
-        }
-
-        // Clear the JWT token from the client's cookies
-        res.clearCookie('token');
-
-        // Optionally, add the token to a blacklist
-        // This step requires additional setup and is not shown here
-
-        res.status(200).send({ message: 'Logout successful' });
-    } catch (error) {
-        console.error(error);
-        res.status(500).send({ message: 'Failed to log out' });
-    }
+// Logout Controller
+export const logoutController = (req, res) => {
+    res.clearCookie('token').json({ message: 'Logged out successfully' });
 };
 
-
-
-//controller for forgetPasswordController
-export const forgetPasswordController = async (req, res) => {
+// Forgot Password Controller
+export const forgotPasswordController = async (req, res) => {
     try {
+        // Validate email first
         const { email } = req.body;
-        const user = await userModel.findOne({ email });
+        if (!email) return res.status(400).json({ message: "Email required" });
 
-        if (!user) {
-            return res.status(404).json({ message: "User not found" });
+        // Check user exists
+        const user = await userModel.findOne({ email });
+        if (!user) return res.status(404).json({ message: "Reset email sent if account exists" });
+
+        // Generate token
+        const resetToken = crypto.randomBytes(32).toString('hex');
+        user.resetPasswordToken = resetToken;
+        user.resetPasswordExpires = Date.now() + 3600000;
+        await user.save({ validateBeforeSave: false });
+
+        // Verify environment variables exist
+        if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+            throw new Error('Email credentials not configured');
         }
 
-        // Generate Reset Token
-        const resetToken = crypto.randomBytes(32).toString("hex");
-        user.resetPasswordToken = resetToken;
-        user.resetPasswordExpires = Date.now() + 3600000; // 1-hour expiration
-
-        await user.save();
-
-        // Send Reset Email (Example: Using Nodemailer)
+        // Configure transporter (WORKING CONFIG)
         const transporter = nodemailer.createTransport({
-            service: 'Gmail',
+            service: 'gmail',
+            host: 'smtp.gmail.com',
+            port: 465,
+            secure: true,
             auth: {
+                type: 'OAuth2',
                 user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASS
+                pass: process.env.EMAIL_PASS,
+                clientId: process.env.OAUTH_CLIENT_ID,
+                clientSecret: process.env.OAUTH_CLIENT_SECRET,
+                refreshToken: process.env.OAUTH_REFRESH_TOKEN
+            },
+            tls: {
+                rejectUnauthorized: false
             }
         });
 
-        const mailOptions = {
-            to: user.email,
-            from: process.env.EMAIL_USER,
-            subject: 'Password Reset Request',
-            html: `<p>You requested a password reset.</p>
-                   <p>Click <a href="${process.env.CLIENT_URL}/reset-password/${resetToken}">here</a> to reset your password.</p>`
-        };
+        // Verify connection
+        await transporter.verify();
+        console.log('SMTP connection ready');
 
-        await transporter.sendMail(mailOptions);
+        // Send email
+        await transporter.sendMail({
+            from: `"Your App" <${process.env.EMAIL_USER}>`,
+            to: email,
+            subject: 'Password Reset',
+            text: `Reset token: ${resetToken}`,
+            html: `<b>Reset Token:</b> ${resetToken}`
+        });
 
-        res.status(200).json({ message: "Reset link sent to your email" });
+        res.json({ success: true, message: "Reset email sent" });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Something went wrong" });
+        console.error('Password Reset Error:', error);
+        res.status(500).json({
+            success: false,
+            message: "Password reset failed",
+            error: error.message,
+            solution: "Verify Gmail credentials and enable less secure apps"
+        });
     }
 };
-//registerSignIn for testing routes
-export const resetPassword = async (req, res) => {
+// Reset Password Controller
+export const resetPasswordController = async (req, res) => {
     try {
         const { token, newPassword } = req.body;
+        
+        // Validate input
+        if (!token || !newPassword) {
+            return res.status(400).json({ 
+                success: false,
+                message: "Token and new password are required" 
+            });
+        }
 
-        // Find user by reset token and check expiry
+        // Find user with valid token
         const user = await userModel.findOne({
             resetPasswordToken: token,
-            resetPasswordExpires: { $gt: Date.now() } // Token should not be expired
+            resetPasswordExpires: { $gt: Date.now() }
         });
 
         if (!user) {
-            return res.status(400).json({ success: false, message: 'Invalid or expired token' });
+            console.log(`Invalid token attempt: ${token}`);
+            return res.status(400).json({ 
+                success: false,
+                message: "Invalid or expired token" 
+            });
         }
 
-        // Hash new password
-        const saltRounds = 10;
-        user.password = await bcrypt.hash(newPassword, saltRounds);
+        // Update password
+        user.password = await hashedPassword(newPassword);
+        user.resetPasswordToken = undefined;
+        user.resetPasswordExpires = undefined;
 
-        // Clear reset token fields
-        user.resetPasswordToken = null;
-        user.resetPasswordExpires = null;
-
-        await user.save();
-
-        res.status(200).json({ success: true, message: 'Password reset successful' });
+        // Save with validation
+        await user.save({ validateModifiedOnly: true });
+        
+        console.log(`Password updated for user: ${user.email}`);
+        res.json({ 
+            success: true,
+            message: "Password reset successful" 
+        });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, message: 'Server error' });
+        console.error('Reset Password Error:', error);
+        res.status(500).json({ 
+            success: false,
+            message: "Password reset failed",
+            error: error.message 
+        });
     }
 };
 export const testRouters = (req,res)=>{
         res.send('this is protected')
 }
-//create post
+// Post Controllers
 export const createPost = async (req, res) => {
     try {
-        if (!req.user) {
-            return res.status(403).json({ success: false, message: "Unauthorized: Login required" });
-        }
-
-        const { title, description } = req.body;
-        if (!title || !description) {
-            return res.status(400).json({ success: false, message: "Title and description are required" });
-        }
-
-        const newPost = new PostCard({
-            title,
-            description,
-            imageURL: req.file?.originalname || null,
-            user: req.user._id, // Associate post with the logged-in user
+        const post = await PostCard.create({
+            ...req.body,
+            imageURL: req.file?.path,
+            user: req.user._id
         });
-
-        await newPost.save();
-        return res.status(201).json({ success: true, message: "Post created successfully", data: newPost });
+        res.status(201).json(post);
     } catch (error) {
-        console.error(error);
-        return res.status(500).json({ success: false, message: "Failed to create post" });
+        res.status(500).json({ message: 'Post creation failed' });
     }
 };
 
-// Get posts
 export const getPosts = async (req, res) => {
     try {
-        const posts = await PostCard.find();
-        return res.status(200).json({ success: true, data: posts });
+        res.json(await PostCard.find().populate('user', 'username'));
     } catch (error) {
-        console.log(error);
-        return res.status(500).json({ success: false, message: 'Failed to fetch posts' });
+        res.status(500).json({ message: 'Failed to fetch posts' });
     }
 };
 
-// Get post by ID
-export const getPostById = async (req, res) => {
-    try {
-        const post = await PostCard.findById(req.params.id);
-        if (!post) {
-            return res.status(404).json({ success: false, message: 'Post not found' });
-        }
-        return res.status(200).json({ success: true, data: post });
-    } catch (error) {
-        console.log(error);
-        return res.status(500).json({ success: false, message: 'Failed to fetch post' });
-    }
-};
-
-// Update post
 export const updatePost = async (req, res) => {
     try {
-        if (!req.user) {
-            return res.status(403).json({ success: false, message: "Unauthorized: Login required" });
-        }
-
-        const { title, description } = req.body;
-        if (!title || !description) {
-            return res.status(400).json({ success: false, message: "Title and description are required" });
-        }
-
-        const updatedPost = await PostCard.findByIdAndUpdate(req.params.id, { title, description }, { new: true });
-        if (!updatedPost) {
-            return res.status(404).json({ success: false, message: "Post not found" });
-        }
-
-        return res.status(200).json({ success: true, data: updatedPost });
+        const post = await PostCard.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        res.json(post || { message: 'Post not found' });
     } catch (error) {
-        console.error(error);
-        return res.status(500).json({ success: false, message: "Failed to update post" });
+        res.status(500).json({ message: 'Update failed' });
     }
 };
 
-
-// Delete post
 export const deletePost = async (req, res) => {
     try {
-        if (!req.user) {
-            return res.status(403).json({ success: false, message: "Unauthorized: Login required" });
-        }
-
-        const deletedPost = await PostCard.findByIdAndDelete(req.params.id);
-        if (!deletedPost) {
-            return res.status(404).json({ success: false, message: "Post not found" });
-        }
-
-        return res.status(200).json({ success: true, message: "Post deleted successfully" });
+        await PostCard.findByIdAndDelete(req.params.id);
+        res.json({ message: 'Post deleted' });
     } catch (error) {
-        console.error(error);
-        return res.status(500).json({ success: false, message: "Failed to delete post" });
+        res.status(500).json({ message: 'Deletion failed' });
     }
 };
