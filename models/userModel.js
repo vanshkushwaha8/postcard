@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 
 const userSchema = new mongoose.Schema({
-    name: {
+    username: {
         type: String,
         required: true,
         trim: true
@@ -25,16 +25,10 @@ const userSchema = new mongoose.Schema({
     },
     role: {
         type: Number,
-        default: 0  // 0 for normal user, 1 for admin
+        default: 0
     },
-    resetPasswordToken: {
-        type: String,
-        default: null
-    },
-    resetPasswordExpires: {
-        type: Date,
-        default: null
-    }
+    resetPasswordToken: String,
+    resetPasswordExpires: Date
 }, { timestamps: true });
 
-export default mongoose.model('users', userSchema);
+export default mongoose.model('User', userSchema);
