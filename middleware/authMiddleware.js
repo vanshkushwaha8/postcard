@@ -1,60 +1,53 @@
-import JWT from 'jsonwebtoken'
+import JWT from 'jsonwebtoken';
 import userModel from '../models/userModel.js';
 
-//registration
-export const registerSignIn =async (req,res,next)=>{
-    try {
-        const token = req.headers.authorization?.split(" ")[1]; // Extract token from Authorization header
-        if (!token) {
-            return res.status(401).json({ success: false, message: 'Unauthorized: No token provided' });
-        }
-
-        // Verify token
-        const decoded = JWT.verify(token, process.env.JWT_SECRET);
-        req.user = decoded; // Attach user details to request
-        next(); // Proceed to next middleware or controller
-    } catch (error) {
-        console.error(error);
-        return res.status(401).json({ success: false, message: 'Unauthorized: Invalid token' });
-    }
-}
-export const isAdmin = async(req,res,next)=>{
-    try {
-        const user = await userModel.findById(req.user._id)
-        if(user.role !==1){
-           return res.status(401).send({
-                success:true,
-                message:'Access Denied',
-            })
-        }else{
-            next();
-        }
-        
-    } catch (error) {
-        console.log(error)
-        res.status(401).send({
-            success:true,
-            message:'Error from admin middleware'
-        })
-    }
-}
+// Unified authentication middleware
 export const authenticate = async (req, res, next) => {
     try {
-        const { authorization } = req.headers;
-        if (!authorization) {
-            return res.status(401).json({ message: 'Unauthorized' });
+        const authHeader = req.headers.authorization;
+        
+        if (!authHeader?.startsWith('Bearer ')) {
+            return res.status(401).json({ 
+                success: false,
+                message: 'Authorization token required' 
+            });
         }
 
-        const token = authorization.replace('Bearer', '').trim();
-        if (!token) {
-            return res.status(401).json({ message: 'Token not provided' });
-        }
-
+        const token = authHeader.split(' ')[1];
         const decoded = JWT.verify(token, process.env.JWT_SECRET);
-        req.user = decoded;
+        
+        // Attach full user data to request
+        const user = await userModel.findById(decoded._id).select('-password');
+        if (!user) {
+            return res.status(401).json({ 
+                success: false,
+                message: 'User not found' 
+            });
+        }
+
+        req.user = user;
         next();
     } catch (error) {
-        console.error(error);
-        res.status(401).json({ message: 'Invalid token' });
+        console.error('Authentication Error:', error.message);
+        
+        const message = error.name === 'JsonWebTokenError' 
+            ? 'Invalid token' 
+            : 'Session expired';
+            
+        res.status(401).json({ 
+            success: false,
+            message 
+        });
     }
+};
+
+// Admin check middleware
+export const isAdmin = (req, res, next) => {
+    if (req.user?.role !== 1) {
+        return res.status(403).json({ 
+            success: false,
+            message: 'Admin access required' 
+        });
+    }
+    next();
 };
